@@ -1,0 +1,7 @@
+{
+  "dependencies": {
+    "dotenv": "^17.2.3",
+    "jsdom": "^27.2.0",
+    "puppeteer": "^24.32.1"
+  }
+}

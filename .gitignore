@@ -1,0 +1,51 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+web/
+
+# dotenv
+.env
+.env.*
+
+# Logs
+logs/
+*.log
+pids/
+*.pid
+
+# Build output
+dist/
+build/
+coverage/
+
+# Editor directories and files
+.vscode/
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Puppeteer / Chromium local cache (usually inside node_modules but just in case)
+.local-chromium/
+
+# Project outputs (screenshots, temporary JSON)
+wikipedia_screenshot.png
+soal_kedinasan.json
+screenshots/
+
+# Misc
+.cache/
+*.tmp
+
+# Ignore any sensitive files
+secrets.json
+
