@@ -2,6 +2,15 @@ const puppeteer = require("puppeteer");
 const { JSDOM } = require("jsdom");
 require("dotenv").config();
 
+const fileName = "SoalKedinasan1";
+const targetUrl = [
+	"https://platform.masukkampus.com/tryout/kedinasan/akses/842443/pembahasan",
+	"https://platform.masukkampus.com/tryout/kedinasan/akses/851571/pembahasan",
+	"https://platform.masukkampus.com/tryout/kedinasan/akses/856010/pembahasan",
+	"https://platform.masukkampus.com/tryout/kedinasan/akses/860983/pembahasan",
+	"https://platform.masukkampus.com/tryout/kedinasan/akses/861103/pembahasan",
+	"https://platform.masukkampus.com/tryout/kedinasan/akses/861126/pembahasan",
+]
 const cookiesToSet = [
 	{
 		name: process.env.COOKIE_NAME,
@@ -18,7 +27,7 @@ const cookiesToSet = [
 	},
 ];
 
-async function captureScreenshot() {
+async function captureScreenshot(targetUrl, fileName) {
 	// 1. Luncurkan browser Chromium/Chrome headless
 	const browser = await puppeteer.launch();
 
@@ -26,8 +35,7 @@ async function captureScreenshot() {
 	const page = await browser.newPage();
 
 	// URL yang akan di-screenshot
-	const targetUrl =
-		"https://platform.masukkampus.com/tryout/kedinasan/akses/842443/pembahasan";
+	// const targetUrl = targetUrl[0];
 
 	// Tentukan nama file output
 	const outputPath = "wikipedia_screenshot.png";
@@ -68,12 +76,15 @@ async function captureScreenshot() {
 		console.log("mengambil kode html #soal-tab");
 
 		const content = await page.$eval("#soal-tab", (el) => el.innerHTML);
-		const soalArray = parseSoalHtml(content);
+		const subjects = await page.$eval(".nav.nav-pills.nav-primary.mb-3.justify-content-start.soal-nav",(el)=>el.innerHTML);
+		
+		const soalArray = parseSoalHtml(content, getSubjectsId(subjects));
 		//jadikan ke dalam file json
 		const fs = require("fs");
-		fs.writeFileSync("soal_kedinasan.json", JSON.stringify(soalArray, null, 2));
+		fs.writeFileSync(`${fileName}.json`, JSON.stringify(soalArray, null, 2));
+
 		console.log(
-			"   Kode HTML #soal-tab berhasil diambil dan disimpan ke soal_kedinasan.json"
+			`   Kode HTML #soal-tab berhasil diambil dan disimpan ke ${fileName}.json`
 		);
 	} catch (error) {
 		console.error("Terjadi error saat mengambil screenshot:", error.message);
@@ -84,23 +95,27 @@ async function captureScreenshot() {
 	}
 }
 
-function parseSoalHtml(htmlString) {
+function parseSoalHtml(htmlString, subjectids) {
 	// Memisahkan string HTML berdasarkan pemisah soal
 	const soalBlocks = htmlString.split('<div class="tab-pane show soal"');
+	let id = 0;
+
 
 	const results = [];
 
 	soalBlocks.forEach((block) => {
 		const questionDetails = extractAllQuestionDetails(block);
 		if (questionDetails) {
+			questionDetails.subjectId = subjectids ? subjectids[id] : null;
 			results.push(questionDetails);
+			id++
 		}
 	});
 
 	return results;
 }
 
-function extractAllQuestionDetails(htmlBlock) {
+function extractAllQuestionDetails(htmlBlock, subjectids) {
 	try {
 		// JSDOM memerlukan tag <div> sebagai pembungkus jika input hanya potongan HTML
 		const dom = new JSDOM(`<div>${htmlBlock}</div>`);
@@ -139,7 +154,7 @@ function extractAllQuestionDetails(htmlBlock) {
 
 		// 5. Ekstraksi Opsi Jawaban (Karena ini adalah bagian kompleks, kita tetap iterasi)
 		const opsiElements = doc.querySelectorAll(".row.mt-3.opsi");
-		const opsiJawaban = {};
+		const opsiJawaban = [];
 
 		opsiElements.forEach((opsi) => {
 			const optionLabelEl = opsi.querySelector(".opsi-button");
@@ -150,8 +165,8 @@ function extractAllQuestionDetails(htmlBlock) {
 
 			const optionTextEl = opsi.querySelector(".opsi-label p");
 			const optionText =
-				optionTextEl && optionTextEl.textContent
-					? optionTextEl.textContent.trim()
+				optionTextEl && optionTextEl.innerHTML
+					? optionTextEl.innerHTML.trim()
 					: optionTextEl.innerHTML.trim();
 
 			const badgeEl = opsi.querySelector(".badge");
@@ -165,19 +180,20 @@ function extractAllQuestionDetails(htmlBlock) {
 			if (!badgeEl) console.warn("Warning: .badge not found in an opsi block");
 
 			// gunakan fallback string kosong bila nilai null agar struktur JSON konsisten
-			opsiJawaban[optionLabel || "unknown"] = [
-				optionPoin || "",
-				optionText || "",
-			];
+			opsiJawaban.push({
+				id: optionLabel,
+				text: convertLatexSpansToImg(optionText),
+				points: Number(optionPoin)
+			});
 		});
 
 		const results = {
-			nomorSoal: nomorSoal,
-			pertanyaan: pertanyaan,
-			opsiJawaban: opsiJawaban,
-			jawabanSaya: jawabanSaya,
-			jawabanBenar: jawabanBenar,
-			pembahasan: pembahasan,
+			id: nomorSoal,
+			text: convertLatexSpansToImg(pertanyaan),
+			options: opsiJawaban,
+			// jawabanSaya: jawabanSaya,
+			// jawabanBenar: jawabanBenar,
+			explanation: convertLatexSpansToImg(pembahasan),
 		};
 
 		return results;
@@ -187,4 +203,101 @@ function extractAllQuestionDetails(htmlBlock) {
 	}
 }
 
-captureScreenshot();
+function getSubjectsId(subjects){
+	const dom = new JSDOM(`<div>${subjects}</div>`);
+	const doc = dom.window.document;
+	const subjectElements = doc.querySelectorAll(".kesulitan");
+	let subjectId = [];
+	subjectElements.forEach((subjEl, index) => {
+		const subjectName = subjEl.textContent.trim();
+		subjectId.push(subjectName);
+	});
+	return subjectId
+}
+
+/**
+ * Mengonversi string HTML yang mengandung teks LaTeX atau simbol matematika
+ * menjadi elemen <img> menggunakan layanan CodeCogs.
+ */
+function convertLatexSpansToImg(htmlString) {
+    if (!htmlString) return htmlString;
+
+    const CODECOGS_BASE_URL = "https://latex.codecogs.com/png.image?";
+
+    let result = htmlString;
+
+    // 1. Normalisasi: Ubah simbol "√" mentah menjadi format LaTeX "\sqrt"
+    // Agar teks seperti "√3" bisa terbaca sebagai "\sqrt3"
+    result = result.replace(/√/g, '\\sqrt ');
+
+    // --- Definisi Pola Regex ---
+
+    // Pattern Utama: <span class="math-tex"><script type="math/tex">...</script></span>
+    const mathTexScriptPattern = /(<span class="math-tex".*?<script type="math\/tex"[^>]*>)(.*?)(<\/script><\/span>)/gs;
+
+    // Pattern 1: <span class="math-tex">\\( ... \\)</span>
+    const pattern1 = /<span class="math-tex">\\\\\\((.*?)\\\\\\)<\/span>/g;
+
+    // Pattern 2: \( ... \) (inline LaTeX)
+    const pattern2 = /\\\\\((.*?)\\\\\)/g;
+
+    // Pattern 3: $$ ... $$ (display math)
+    const pattern3 = /\$\$(.*?)\$\$/g;
+
+    // Pattern 4: $ ... $ (inline math)
+    const pattern4 = /(?<!\$)\$(?!\$)(.*?)(?<!\$)\$(?!\$)/g;
+
+    // Pattern 5: Perintah LaTeX telanjang (khusus untuk \sqrt, \frac, dll yang tidak terbungkus)
+    const pattern5 = /(\\sqrt\{.*?\})|(\\sqrt\s*\d+)|(\\frac\{.*?\}\{.*?\})/g;
+
+
+    // --- Proses Eksekusi ---
+
+    // A. Proses pola <script type="math/tex"> (Format standar beberapa editor)
+    result = result.replace(mathTexScriptPattern, (match, openingTag, latexContent) => {
+        try {
+            const cleanLatex = latexContent.trim();
+            if (!cleanLatex) return match;
+
+            const encodedLatex = encodeURIComponent(cleanLatex);
+            return `<img src="${CODECOGS_BASE_URL}${encodedLatex}" alt="Math" class="rendered-math-img" style="display:inline; vertical-align:middle; margin: 0 2px;">`;
+        } catch (e) {
+            return match;
+        }
+    });
+
+    // B. Proses semua pola lainnya
+    const patterns = [
+        { regex: pattern1, name: "span-bracket" },
+        { regex: pattern2, name: "escaped-paren" },
+        { regex: pattern3, name: "double-dollar" },
+        { regex: pattern4, name: "single-dollar" },
+        { regex: pattern5, name: "raw-latex" },
+    ];
+
+    patterns.forEach(({ regex }) => {
+        result = result.replace(regex, (match, p1) => {
+            try {
+                // p1 adalah isi grup (capture group), jika null maka gunakan seluruh match
+                const content = p1 || match;
+                const cleanLatex = content.trim();
+                
+                if (!cleanLatex) return match;
+
+                const encodedLatex = encodeURIComponent(cleanLatex);
+                return `<img src="${CODECOGS_BASE_URL}${encodedLatex}" alt="Math" class="rendered-math-img" style="display:inline; vertical-align:middle; margin: 0 2px;">`;
+            } catch (e) {
+                return match;
+            }
+        });
+    });
+
+    return result;
+}
+
+
+// for(index in targetUrl){
+// 	captureScreenshot(targetUrl[index], `${fileName}-${parseInt(index)+1}`);
+// }
+
+captureScreenshot(targetUrl[0], `${fileName}-1`);
