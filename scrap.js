@@ -218,6 +218,13 @@ function getSubjectsId(subjects){
 /**
  * Mengonversi string HTML yang mengandung teks LaTeX atau simbol matematika
  * menjadi elemen <img> menggunakan layanan CodeCogs.
+ * 
+ * Menangani berbagai format:
+ * - <script type="math/tex">LaTeX</script>
+ * - \( LaTeX \)
+ * - $$ LaTeX $$
+ * - $ LaTeX $
+ * - Perintah LaTeX telanjang
  */
 function convertLatexSpansToImg(htmlString) {
     if (!htmlString) return htmlString;
@@ -226,35 +233,44 @@ function convertLatexSpansToImg(htmlString) {
 
     let result = htmlString;
 
-    // 1. Normalisasi: Ubah simbol "√" mentah menjadi format LaTeX "\sqrt"
-    // Agar teks seperti "√3" bisa terbaca sebagai "\sqrt3"
-    result = result.replace(/√/g, '\\sqrt ');
-
     // --- Definisi Pola Regex ---
 
-    // Pattern Utama: <span class="math-tex"><script type="math/tex">...</script></span>
-    const mathTexScriptPattern = /(<span class="math-tex".*?<script type="math\/tex"[^>]*>)(.*?)(<\/script><\/span>)/gs;
+    // Pattern 0: <span class="math-tex"> dengan atau tanpa MathJax HTML, diakhiri dengan <script type="math/tex">
+    // Ini adalah pattern terpenting yang menangani MathJax kompleks
+    const pattern0 = /<span class="math-tex"[^>]*>.*?<script type="math\/tex"[^>]*>(.*?)<\/script><\/span>/gs;
 
-    // Pattern 1: <span class="math-tex">\\( ... \\)</span>
-    const pattern1 = /<span class="math-tex">\\\\\\((.*?)\\\\\\)<\/span>/g;
+    // Pattern 1: Hanya <span class="math-tex">\( ... \)</span>
+    const pattern1 = /<span class="math-tex">\\\\?\(([^)]*?)\\\\?\)<\/span>/g;
 
-    // Pattern 2: \( ... \) (inline LaTeX)
-    const pattern2 = /\\\\\((.*?)\\\\\)/g;
+    // Pattern 2: \( ... \) tanpa span (escaped atau tidak)
+    const pattern2 = /\\?\\\((.*?)\\\)?/g;
 
     // Pattern 3: $$ ... $$ (display math)
     const pattern3 = /\$\$(.*?)\$\$/g;
 
-    // Pattern 4: $ ... $ (inline math)
-    const pattern4 = /(?<!\$)\$(?!\$)(.*?)(?<!\$)\$(?!\$)/g;
-
-    // Pattern 5: Perintah LaTeX telanjang (khusus untuk \sqrt, \frac, dll yang tidak terbungkus)
-    const pattern5 = /(\\sqrt\{.*?\})|(\\sqrt\s*\d+)|(\\frac\{.*?\}\{.*?\})/g;
-
+    // Pattern 4: $ ... $ (inline math, tapi hindari kata yang punya $ di dalamnya)
+    const pattern4 = /(?<!\$)\$([^\$]+?)\$(?!\$)/g;
 
     // --- Proses Eksekusi ---
 
-    // A. Proses pola <script type="math/tex"> (Format standar beberapa editor)
-    result = result.replace(mathTexScriptPattern, (match, openingTag, latexContent) => {
+    // Priority order: mulai dari pattern yang paling spesifik
+
+    // A. Proses pattern 0 terlebih dahulu (pola paling kompleks dengan MathJax)
+    result = result.replace(pattern0, (match, latexContent) => {
+        try {
+            const cleanLatex = latexContent.trim();
+            if (!cleanLatex || cleanLatex === "...") return match;
+
+            const encodedLatex = encodeURIComponent(cleanLatex);
+            return `<img src="${CODECOGS_BASE_URL}${encodedLatex}" alt="Math" class="rendered-math-img" style="display:inline; vertical-align:middle; margin: 0 2px;">`;
+        } catch (e) {
+            console.warn("Pattern 0 failed:", e.message);
+            return match;
+        }
+    });
+
+    // B. Proses pattern 1 (span dengan \( \))
+    result = result.replace(pattern1, (match, latexContent) => {
         try {
             const cleanLatex = latexContent.trim();
             if (!cleanLatex) return match;
@@ -262,42 +278,53 @@ function convertLatexSpansToImg(htmlString) {
             const encodedLatex = encodeURIComponent(cleanLatex);
             return `<img src="${CODECOGS_BASE_URL}${encodedLatex}" alt="Math" class="rendered-math-img" style="display:inline; vertical-align:middle; margin: 0 2px;">`;
         } catch (e) {
+            console.warn("Pattern 1 failed:", e.message);
             return match;
         }
     });
 
-    // B. Proses semua pola lainnya
+    // C. Proses pattern lainnya
     const patterns = [
-        { regex: pattern1, name: "span-bracket" },
-        { regex: pattern2, name: "escaped-paren" },
         { regex: pattern3, name: "double-dollar" },
         { regex: pattern4, name: "single-dollar" },
-        { regex: pattern5, name: "raw-latex" },
+        { regex: pattern2, name: "escaped-paren" },
     ];
 
-    patterns.forEach(({ regex }) => {
+    patterns.forEach(({ regex, name }) => {
         result = result.replace(regex, (match, p1) => {
             try {
-                // p1 adalah isi grup (capture group), jika null maka gunakan seluruh match
-                const content = p1 || match;
+                // p1 adalah capture group
+                const content = p1 ? p1 : match.slice(1, -1);
                 const cleanLatex = content.trim();
                 
-                if (!cleanLatex) return match;
+                if (!cleanLatex || cleanLatex.length === 0) return match;
+                
+                // Jangan proses jika terlihat seperti bukan LaTeX
+                if (!/[\\^_{}()\[\]\/]/.test(cleanLatex) && cleanLatex.length < 3) {
+                    return match;
+                }
 
                 const encodedLatex = encodeURIComponent(cleanLatex);
                 return `<img src="${CODECOGS_BASE_URL}${encodedLatex}" alt="Math" class="rendered-math-img" style="display:inline; vertical-align:middle; margin: 0 2px;">`;
             } catch (e) {
+                console.warn(`${name} pattern failed:`, e.message);
                 return match;
             }
         });
     });
 
+    // Cleanup: Hapus tag span yang tersisa dari MathJax preview
+    result = result.replace(/<span class="MathJax_Preview"[^>]*>.*?<\/span>/gs, '');
+    result = result.replace(/<span class="math"[^>]*>.*?<\/span>/gs, '');
+    result = result.replace(/<nobr[^>]*>.*?<\/nobr>/gs, '');
+    result = result.replace(/<span class="MJX_Assistive_MathML"[^>]*>.*?<\/span>/gs, '');
+
     return result;
 }
 
 
-// for(index in targetUrl){
-// 	captureScreenshot(targetUrl[index], `${fileName}-${parseInt(index)+1}`);
-// }
+for(index in targetUrl){
+	captureScreenshot(targetUrl[index], `${fileName}-${parseInt(index)+1}`);
+}
 
-captureScreenshot(targetUrl[0], `${fileName}-1`);
+// captureScreenshot(targetUrl[0], `${fileName}-1`);
